@@ -1,0 +1,106 @@
+---
+title: "Fetch Dipper data"
+author: "Justin Hollis"
+date: "2023-03-06"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+source("setup.R")
+tmap_mode("view")
+```
+
+
+```{r}
+counties <- tigris::counties(state = "CO")
+```
+
+
+```{r}
+linear_features <- linear_water(state = "CO", county = c("Montrose", "San Miguel", "Delta", "Montezuma", "Ouray", "Mesa")) # County needs to = where Dolores San Miguel 
+```
+
+```{r}
+rivers <- linear_features %>% 
+  filter(str_detect(FULLNAME, "Riv"))
+
+elevation <- get_elev_raster(counties, z = 7)
+writeRaster(elevation, "data/elevation.tif", overwrite = TRUE)
+
+elevation <- crop(elevation,counties)
+
+```
+
+
+```{r}
+#make a string of species names to use in the 'occ_data' function
+species <- c("Cinclus mexicanus")
+
+#also make a string of common names
+common_name <- c("American Dipper")
+```
+
+```{r}
+emptylist <- vector("list", length = length(species))
+commonemplist <- vector("list", length = length(common_name))
+```
+
+```{r}
+crawl <- function(year){
+  for (i in 1:length(species)) {
+    occ <- occ_data(
+      scientificName = species[[i]],
+      hasCoordinate = TRUE, 
+      geometry = st_bbox(counties),
+      year = year,
+      limit = 5000
+    ) %>%
+    .$data # 
+  
+  # add species name column as ID to use later
+  occ$ID <- common_name [[i]]
+  
+  #clean by removing duplicate occurrences
+  emptylist[[i]] <-
+    occ %>% distinct(decimalLatitude, decimalLongitude, .keep_all = TRUE) %>%
+    dplyr::select(Species = ID,
+                  decimalLatitude,
+                  decimalLongitude,
+                  year,
+                  month,
+                  basisOfRecord) 
+  }
+  dipper <- bind_rows(emptylist)
+}
+
+
+
+years <- c(2013:2023)
+dipper <- map_dfr(years, crawl)
+```
+
+```{r}
+dipperocc <- dipper %>% 
+  st_as_sf(coords = c(x ="decimalLongitude", y ="decimalLatitude"), crs = 4269)
+```
+
+```{r}
+dipoints <- dipper %>% 
+  select(x = decimalLatitude, y = decimalLongitude) %>% 
+  relocate(x, .after = y)
+
+```
+
+```{r}
+
+pointelev <- terra::extract(elevation, dipoints)
+
+dipperocc$elevation=pointelev
+```
+
+```{r}
+save(dipperocc, elevation, file = "dipperobs.Rdata")
+```
+
